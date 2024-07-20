@@ -1,19 +1,20 @@
 ﻿#include <opencv2/opencv.hpp>
-#include <opencv2/objdetect.hpp>
-#include <opencv2/highgui.hpp>
-#include <opencv2/imgproc.hpp>
+#include <opencv2/dnn.hpp>
 #include <iostream>
 
-int main() {
-    // Haar Cascade 파일 경로
-    std::string face_cascade_name = "C:\\opencv\\sources\\data\\haarcascade_frontalface_default.xml";
-    cv::CascadeClassifier face_cascade;
+const size_t inWidth = 300;
+const size_t inHeight = 300;
+const double inScaleFactor = 1.0;
+const float confidenceThreshold = 0.7;
+const cv::Scalar meanVal(104.0, 177.0, 123.0);
 
-    // Haar Cascade 파일 로드
-    if (!face_cascade.load(face_cascade_name)) {
-        std::cerr << "Error loading face cascade file. Exiting!" << std::endl;
-        return -1;
-    }
+int main() {
+    // 딥러닝 모델 로드
+    cv::dnn::Net net = cv::dnn::readNetFromCaffe(
+        "deploy.prototxt",
+        "res10_300x300_ssd_iter_140000_fp16.caffemodel");
+
+
 
     // 웹캠 캡처 시작
     cv::VideoCapture capture(0);
@@ -29,18 +30,34 @@ int main() {
             break;
         }
 
-        // 회색조 이미지로 변환
-        cv::Mat frame_gray;
-        cv::cvtColor(frame, frame_gray, cv::COLOR_BGR2GRAY);
-        cv::equalizeHist(frame_gray, frame_gray);
+        // 프레임을 블롭으로 변환
+        cv::Mat inputBlob = cv::dnn::blobFromImage(frame, inScaleFactor,
+            cv::Size(inWidth, inHeight), meanVal, false, false);
 
-        // 얼굴 검출
-        std::vector<cv::Rect> faces;
-        face_cascade.detectMultiScale(frame_gray, faces);
+        // 네트워크에 블롭 입력
+        net.setInput(inputBlob, "data");
 
-        // 얼굴 주위에 네모 박스 그리기
-        for (size_t i = 0; i < faces.size(); i++) {
-            cv::rectangle(frame, faces[i], cv::Scalar(255, 0, 0), 2);
+        // 얼굴 검출 실행
+        cv::Mat detection = net.forward("detection_out");
+        cv::Mat detectionMat(detection.size[2], detection.size[3], CV_32F, detection.ptr<float>());
+
+        // 검출된 얼굴에 박스 그리기
+        for (int i = 0; i < detectionMat.rows; i++) {
+            float confidence = detectionMat.at<float>(i, 2);
+
+            if (confidence > confidenceThreshold) {
+                int x1 = static_cast<int>(detectionMat.at<float>(i, 3) * frame.cols);
+                int y1 = static_cast<int>(detectionMat.at<float>(i, 4) * frame.rows);
+                int x2 = static_cast<int>(detectionMat.at<float>(i, 5) * frame.cols);
+                int y2 = static_cast<int>(detectionMat.at<float>(i, 6) * frame.rows);
+
+                cv::rectangle(frame, cv::Point(x1, y1), cv::Point(x2, y2), cv::Scalar(0, 255, 0), 2);
+                std::string label = cv::format("Face: %.2f", confidence);
+                int baseLine;
+                cv::Size labelSize = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseLine);
+                cv::putText(frame, label, cv::Point(x1, y1 - labelSize.height),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 255, 0));
+            }
         }
 
         // 결과 화면에 표시
